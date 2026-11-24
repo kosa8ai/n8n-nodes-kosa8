@@ -1,6 +1,7 @@
 import type {
 	IDataObject,
 	IExecuteFunctions,
+	IHookFunctions,
 	IHttpRequestMethods,
 	IHttpRequestOptions,
 	ILoadOptionsFunctions,
@@ -22,7 +23,7 @@ export const MAX_BUFFERED_EXEC_S = 90;
 const MAX_RATE_LIMIT_RETRIES = 3;
 const MAX_RETRY_AFTER_S = 30;
 
-type Context = IExecuteFunctions | ILoadOptionsFunctions;
+type Context = IExecuteFunctions | ILoadOptionsFunctions | IHookFunctions;
 
 interface Kosa8RequestOptions {
 	qs?: IDataObject;
@@ -127,6 +128,10 @@ export function kosa8ApiError(
 				? ` Try again in ${Math.ceil(body.retry_after_s)} s.`
 				: '';
 		hints.push(`GitHub did not answer or is rate limiting.${wait}`);
+	} else if (code === 'human_required') {
+		hints.push(
+			'Only a person can do this. Approve it in kosa8 (https://app.kosa8.com/app#autopilot), Slack or the signed link kosa8 sent.',
+		);
 	} else if (statusCode === 401) {
 		hints.push(
 			'Check the API key in the kosa8 Cloud API credential, or create a new one at https://app.kosa8.com/app#keys.',
@@ -146,7 +151,9 @@ export function kosa8ApiError(
 			'The API key may lack the scope this operation needs (sandboxes:read or sandboxes:write).',
 		);
 	} else if (statusCode === 404) {
-		hints.push('Check the sandbox ID or the path. A deleted sandbox cannot be used again.');
+		hints.push(
+			'Check the ID (sandbox, bot or run) or the path. A deleted sandbox cannot be used again.',
+		);
 	} else if (statusCode === 423) {
 		hints.push(
 			'The organization is frozen in the kosa8 Security Center. An owner or admin must unfreeze it.',

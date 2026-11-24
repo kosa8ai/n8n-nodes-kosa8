@@ -42,7 +42,8 @@
 			"dist/credentials/Kosa8CloudApi.credentials.js"
 		],
 		"nodes": [
-			"dist/nodes/Kosa8Cloud/Kosa8Cloud.node.js"
+			"dist/nodes/Kosa8Cloud/Kosa8Cloud.node.js",
+			"dist/nodes/Kosa8CloudTrigger/Kosa8CloudTrigger.node.js"
 		]
 	},
 	"devDependencies": {

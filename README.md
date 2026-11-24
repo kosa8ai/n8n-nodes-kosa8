@@ -7,6 +7,7 @@ This is an n8n community node for [kosa8 Cloud](https://kosa8.com). It lets your
 - [Installation](#installation)
 - [Credentials](#credentials)
 - [Operations](#operations)
+- [Trigger](#trigger)
 - [Using it as an AI agent tool](#using-it-as-an-ai-agent-tool)
 - [Example workflow](#example-workflow)
 - [Errors](#errors)
@@ -69,6 +70,27 @@ Pick the sandbox from a list, or give its ID (`sbx_…`), usually by expression 
 ### GitHub repos
 
 Connect GitHub once in kosa8 Cloud (an admin, at <https://app.kosa8.com/auth/github/connect>) and pick the repos kosa8 may use. Then **Create** with **Repository** starts a sandbox from a repo, and **Push Branch** / **Open Pull Request** send the changes back. kosa8 makes a GitHub token for that one repo and that one operation, valid for at most an hour; the token never enters the sandbox, and every use is in the audit log. See <https://docs.kosa8.com/guides/cloud-github/>.
+
+### Autopilot
+
+Autopilot bots watch your sandboxes, spend and agents and act on what they see. From n8n you can read them and run them; turning a bot on and answering approvals stay with a person in kosa8 (<https://app.kosa8.com/app#autopilot>), Slack or a signed link.
+
+| Operation | What it does |
+| --- | --- |
+| **List Bots** | One item per bot: `id`, `name`, `state` (draft, on, paused, ...), `template`, `last_run`, `spent_usd`, ... |
+| **Run Bot** | Runs a bot now. **Dry Run** (on by default) reports what it would do now and over the last 7 days, changes nothing and is never billed. Turn it off for a real run (the bot must be on). Returns the run. |
+| **List Runs** | A bot's runs, newest first (**Limit**, up to 100). |
+| **Get Run** | One run (`brun_...`) with its steps, cost and outcome. |
+| **List Pending Approvals** | Risky (T3) bot steps waiting for a person: `action`, `args`, `rationale`, `expires_at`. Read-only: there is no approve or reject operation, by design. |
+
+## Trigger
+
+The **kosa8 Cloud Trigger** node starts a workflow when a kosa8 event arrives:
+
+- **Bot Run Finished** (`bot.run.finished`: `bot_id`, `run_id`, `state`)
+- **Approval Needed** (`bot.approval.requested`: `approval_id`, `bot_id`, `action`, `args`)
+
+When the workflow is activated the node registers its webhook URL with kosa8 (`POST /v1/webhooks`) and keeps the signing secret; it removes the webhook when the workflow is deactivated. Every delivery's `Kosa8-Signature` is checked (HMAC-SHA256, at most 5 minutes old) and a bad one is answered 401. The webhook URL must be public https (kosa8 refuses localhost and private addresses), and the API key needs the `admin` scope to manage webhooks. Under **Options**, **Bot ID** limits it to one bot. Use **Approval Needed** to tell people where to approve (a chat message, a ticket); the approval itself is made by a person in kosa8, Slack or the signed link.
 
 ## Using it as an AI agent tool
 
