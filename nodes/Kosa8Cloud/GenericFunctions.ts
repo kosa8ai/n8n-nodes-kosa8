@@ -9,7 +9,7 @@ import type {
 import { NodeApiError, sleep } from 'n8n-workflow';
 
 /** Where an admin connects GitHub to kosa8 Cloud. */
-export const GITHUB_SETTINGS_URL = 'https://app.kosa8.com/app#settings/github';
+export const GITHUB_SETTINGS_URL = 'https://app.kosa8.com/auth/github/connect';
 
 export const CREDENTIAL_NAME = 'kosa8CloudApi';
 export const DEFAULT_BASE_URL = 'https://api.kosa8.com';
