@@ -72,6 +72,8 @@ test('description: tool use, credential, resources', () => {
 		'sandbox:sleep',
 		'sandbox:wake',
 		'sandbox:executeCommand',
+		'sandbox:pushBranch',
+		'sandbox:openPullRequest',
 		'file:read',
 		'file:write',
 		'file:list',
@@ -132,6 +134,121 @@ test('create polls until running and sends the options', async () => {
 		env: { A: '1' },
 	});
 	assert.equal(polls, 2);
+});
+
+test('create sends a GitHub repo and refuses one that is not owner/name', async () => {
+	const ctx = context({
+		params: { resource: 'sandbox', operation: 'create', template: '', options: { repo: ' acme/api@main ' } },
+		routes: [
+			[
+				'POST',
+				'/v1/sandboxes',
+				{
+					body: {
+						sandbox: {
+							id: 'sbx_1',
+							state: 'running',
+							template: 'base',
+							repo: { full_name: 'acme/api', ref: 'main', path: '/workspace/api', status: 'cloned' },
+						},
+					},
+				},
+			],
+		],
+	});
+	const [[item]] = await run(ctx);
+	assert.deepEqual(ctx.requests[0].body, { repo: 'acme/api@main' });
+	assert.equal(item.json.repo.status, 'cloned');
+
+	const bad = context({
+		params: { resource: 'sandbox', operation: 'create', template: '', options: { repo: 'not a repo' } },
+		routes: [],
+	});
+	await assert.rejects(run(bad), /owner\/name/);
+});
+
+test('push branch and open pull request send only the options given', async () => {
+	const push = context({
+		params: {
+			resource: 'sandbox',
+			operation: 'pushBranch',
+			sandboxId: { mode: 'id', value: 'sbx_1' },
+			options: { branch: 'fix/login', message: 'Fix login' },
+		},
+		routes: [
+			[
+				'POST',
+				'/v1/sandboxes/sbx_1/github/push',
+				{ body: { branch: 'fix/login', sha: 'abc', compare_url: 'https://github.com/acme/api/compare/fix/login', files_changed: 2 } },
+			],
+		],
+	});
+	const [[pushed]] = await run(push);
+	assert.deepEqual(push.requests[0].body, { branch: 'fix/login', message: 'Fix login' });
+	assert.equal(pushed.json.sandbox_id, 'sbx_1');
+	assert.equal(pushed.json.files_changed, 2);
+
+	const pr = context({
+		params: {
+			resource: 'sandbox',
+			operation: 'openPullRequest',
+			sandboxId: { mode: 'id', value: 'sbx_1' },
+			options: { title: 'Fix login', base: 'main', draft: false, message: 'ignored' },
+		},
+		routes: [
+			[
+				'POST',
+				'/v1/sandboxes/sbx_1/github/pull-request',
+				{ body: { number: 12, url: 'https://github.com/acme/api/pull/12', branch: 'kosa8/abc', sha: 'abc' } },
+			],
+		],
+	});
+	const [[opened]] = await run(pr);
+	assert.deepEqual(pr.requests[0].body, { title: 'Fix login', base: 'main', draft: false });
+	assert.equal(opened.json.url, 'https://github.com/acme/api/pull/12');
+});
+
+test('GitHub errors say where to connect or approve', async () => {
+	const notConnected = context({
+		params: { resource: 'sandbox', operation: 'openPullRequest', sandboxId: { mode: 'id', value: 'sbx_1' }, options: {} },
+		routes: [
+			[
+				'POST',
+				'/v1/sandboxes/sbx_1/github/pull-request',
+				{
+					statusCode: 409,
+					body: { error: 'github_not_connected', message: 'Connect GitHub first.', connect_url: 'https://app.kosa8.com/app#settings/github' },
+				},
+			],
+		],
+	});
+	await assert.rejects(run(notConnected), (err) => {
+		assert.match(err.description, /app#settings\/github/);
+		return true;
+	});
+	const perms = context({
+		params: { resource: 'sandbox', operation: 'pushBranch', sandboxId: { mode: 'id', value: 'sbx_1' }, options: {} },
+		routes: [
+			[
+				'POST',
+				'/v1/sandboxes/sbx_1/github/push',
+				{
+					statusCode: 409,
+					body: {
+						error: 'github_permissions',
+						message: 'Approve permissions.',
+						missing: ['contents:write'],
+						settings_url: 'https://github.com/settings/installations/7',
+					},
+				},
+			],
+		],
+	});
+	await assert.rejects(run(perms), (err) => {
+		assert.match(err.description, /contents:write/);
+		assert.match(err.description, /installations\/7/);
+		return true;
+	});
 });
 
 test('execute command: shell string goes through sh -c', async () => {

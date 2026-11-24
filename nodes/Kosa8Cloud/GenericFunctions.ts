@@ -8,6 +8,9 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError, sleep } from 'n8n-workflow';
 
+/** Where an admin connects GitHub to kosa8 Cloud. */
+export const GITHUB_SETTINGS_URL = 'https://app.kosa8.com/app#settings/github';
+
 export const CREDENTIAL_NAME = 'kosa8CloudApi';
 export const DEFAULT_BASE_URL = 'https://api.kosa8.com';
 export const PRICING_URL = 'https://kosa8.com/pricing/';
@@ -103,7 +106,28 @@ export function kosa8ApiError(
 	let message = `kosa8 Cloud: ${apiMessage}`;
 	const hints: string[] = [];
 
-	if (statusCode === 401) {
+	if (code === 'github_not_connected') {
+		const url = (typeof body.connect_url === 'string' && body.connect_url) || GITHUB_SETTINGS_URL;
+		hints.push(`Connect GitHub once (an admin of the organization): ${url}`);
+	} else if (code === 'github_permissions') {
+		const missing = Array.isArray(body.missing) ? (body.missing as string[]).join(', ') : '';
+		const url = (typeof body.settings_url === 'string' && body.settings_url) || GITHUB_SETTINGS_URL;
+		hints.push(
+			`The kosa8 GitHub App needs ${missing || 'more permissions'}. Approve them on GitHub: ${url}`,
+		);
+	} else if (code === 'repo_not_found') {
+		hints.push(
+			"The repo is not visible to your organization's GitHub connection. Add it to the kosa8 GitHub App's repositories on GitHub, or check owner/name.",
+		);
+	} else if (code === 'no_changes') {
+		hints.push("Nothing changed in the sandbox's repo, so there is nothing to push.");
+	} else if (code === 'github_unavailable') {
+		const wait =
+			typeof body.retry_after_s === 'number'
+				? ` Try again in ${Math.ceil(body.retry_after_s)} s.`
+				: '';
+		hints.push(`GitHub did not answer or is rate limiting.${wait}`);
+	} else if (statusCode === 401) {
 		hints.push(
 			'Check the API key in the kosa8 Cloud API credential, or create a new one at https://app.kosa8.com/app#keys.',
 		);
@@ -230,6 +254,7 @@ const SIMPLE_SANDBOX_FIELDS = [
 	'created_at',
 	'delete_after',
 	'cost_usd',
+	'repo',
 ];
 
 export function simplifySandbox(sandbox: IDataObject): IDataObject {
