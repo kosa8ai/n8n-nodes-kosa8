@@ -24,6 +24,8 @@ import {
 /** States a sandbox does not come back from. */
 const FINAL_STATES = ['error', 'deleted', 'expired', 'host_removed', 'host_lost', 'stopped'];
 const CREATE_POLL_MS = 1000;
+/** owner/name, optionally @ref (a branch, tag or commit). */
+const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}(@\S+)?$/;
 
 interface EnvCollection {
 	variables?: Array<{ name: string; value: string }>;
@@ -202,6 +204,20 @@ async function sandboxOperation(
 		if (options.ttl !== undefined) body.ttl_s = options.ttl;
 		if (options.sleepAfter !== undefined) body.sleep_after_s = options.sleepAfter;
 		if (options.persistent) body.persistent = true;
+		if (typeof options.repo === 'string' && options.repo.trim()) {
+			const repo = options.repo.trim();
+			if (!REPO_RE.test(repo)) {
+				throw new NodeOperationError(
+					this.getNode(),
+					`'Repository' must be owner/name, got '${repo}'`,
+					{
+						itemIndex: i,
+						description: 'For example acme/api, or acme/api@main for a branch, tag or commit.',
+					},
+				);
+			}
+			body.repo = repo;
+		}
 		const env = envEntries(options.env as EnvCollection);
 		if (env.length) {
 			body.env = Object.fromEntries(env.map((v) => [v.name.trim(), v.value]));
@@ -377,6 +393,26 @@ async function sandboxOperation(
 		if (result.stdout_truncated) json.stdout_truncated = true;
 		if (result.stderr_truncated) json.stderr_truncated = true;
 		return out(json, i);
+	}
+
+	if (operation === 'pushBranch' || operation === 'openPullRequest') {
+		const options = this.getNodeParameter('options', i, {}) as IDataObject;
+		const keys =
+			operation === 'pushBranch' ? ['branch', 'message'] : ['title', 'body', 'base', 'branch'];
+		const body: IDataObject = {};
+		for (const k of keys) {
+			if (typeof options[k] === 'string' && (options[k] as string) !== '') body[k] = options[k];
+		}
+		if (operation === 'openPullRequest' && typeof options.draft === 'boolean') {
+			body.draft = options.draft;
+		}
+		const path = operation === 'pushBranch' ? '/github/push' : '/github/pull-request';
+		const result = (await kosa8ApiRequest.call(this, 'POST', sandboxUrl(id, path), {
+			body,
+			itemIndex: i,
+			timeout: 180_000,
+		})) as IDataObject;
+		return out({ sandbox_id: id, ...result }, i);
 	}
 
 	if (operation === 'getBackgroundCommand') {

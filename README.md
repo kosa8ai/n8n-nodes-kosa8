@@ -40,13 +40,15 @@ The key is sent as `Authorization: Bearer <key>`. Give it the `sandboxes:read` a
 
 | Operation | What it does |
 | --- | --- |
-| **Create** | Creates a sandbox and waits until it is running. Choose a **Template** (or the organization default) and, under **Options**: **Name**, **Size** (2x4, 4x8, 8x16 or 16x32 vCPU x GiB), **Region**, **Delete After (Seconds)** (60 s to 90 days), **Sleep After (Seconds)**, **Environment Variables**, **Persistent**, and **Wait Timeout (Seconds)**. A sized sandbox boots cold and can take longer; the node polls until it is running. |
+| **Create** | Creates a sandbox and waits until it is running. Choose a **Template** (or the organization default) and, under **Options**: **Name**, **Size** (2x4, 4x8, 8x16 or 16x32 vCPU x GiB), **Region**, **Delete After (Seconds)** (60 s to 90 days), **Sleep After (Seconds)**, **Environment Variables**, **Persistent**, **Repository** (a GitHub repo as `owner/name` or `owner/name@ref`, cloned into `/workspace/<name>`), and **Wait Timeout (Seconds)**. A sized sandbox boots cold and can take longer; the node polls until it is running. |
 | **Get** | Returns one sandbox. |
 | **Get Many** | Lists sandboxes, newest first, with **Return All** / **Limit** and filters for **Name** and **Include Deleted**. |
 | **Delete** | Deletes a sandbox permanently, with its files. Returns `{ "deleted": true }`. |
 | **Sleep** | Snapshots a sandbox and frees its memory. It wakes on the next command or file call. |
 | **Wake** | Restores a sleeping sandbox now. |
 | **Execute Command** | Runs a command and returns `stdout`, `stderr` and `exit_code`. **Command Type** is either **Shell Command** (one line run with `sh -c`, so pipes, `&&` and variables work) or **Arguments** (the program and each argument separately, no shell). Set **Timeout (Seconds)** (a command that waits for its answer runs at most 90 s), per-command **Environment Variables**, **Fail on Non-Zero Exit Code**, and **Run in Background** for longer commands. |
+| **Push Branch** | Commits everything that changed in the sandbox's GitHub repo and pushes it to a branch (**Branch**, default `kosa8/<sandbox short ID>`; **Commit Message**). Returns `branch`, `sha`, `compare_url` and `files_changed`. |
+| **Open Pull Request** | Pushes as **Push Branch** does and opens a pull request: **Title**, **Body**, **Base Branch** (default the repo's default branch), **Branch**, **Draft** (on by default). Returns `number`, `url`, `branch` and `sha`. |
 | **Get Background Command** | Returns the state, exit code and output so far of a command started with **Run in Background**. |
 
 Get, Get Many, Create, Sleep and Wake have a **Simplify** switch (on by default) that returns the ten most useful fields: `id`, `name`, `state`, `template`, `region`, `cpus`, `mem_mb`, `created_at`, `delete_after`, `cost_usd`. Turn it off for the full sandbox record.
@@ -63,6 +65,10 @@ Paths are absolute, or relative to `/workspace`. `/workspace` is the sandbox's w
 | **Delete** | Deletes a file, or a folder with **Recursive**. Returns `{ "deleted": true }`. |
 
 Pick the sandbox from a list, or give its ID (`sbx_…`), usually by expression from an earlier **Create** step: `{{ $('Create Sandbox').item.json.id }}`.
+
+### GitHub repos
+
+Connect GitHub once in kosa8 Cloud (an admin, at <https://app.kosa8.com/app#settings/github>) and pick the repos kosa8 may use. Then **Create** with **Repository** starts a sandbox from a repo, and **Push Branch** / **Open Pull Request** send the changes back. kosa8 makes a GitHub token for that one repo and that one operation, valid for at most an hour; the token never enters the sandbox, and every use is in the audit log. See <https://docs.kosa8.com/guides/github-repos/>.
 
 ## Using it as an AI agent tool
 
@@ -91,6 +97,7 @@ The node shows kosa8 Cloud's own `message` for a failed call, with what to do ne
 - **402**: no plan, a plan limit, a failed payment or the spending cap. The node shows kosa8's `agent_message` and the `upgrade_url` where you can fix it.
 - **404**: the sandbox or path does not exist.
 - **429**: too many requests (retried for you, honouring `Retry-After`) or too many active sandboxes (`quota_exceeded`: delete sandboxes you no longer need).
+- **409 `github_not_connected`**: connect GitHub first; the node shows where. **409 `github_permissions`**: the kosa8 GitHub App needs the permissions listed; approve them at the link shown. **409 `no_changes`**: nothing to push. **404 `repo_not_found`**: the repo is not in your GitHub connection.
 - **504 `exec_timeout`**: a command ran past its timeout or the 90 s limit. Use **Run in Background** for long commands.
 
 Turn on the node's **On Error > Continue** setting to get the message in the output instead of stopping the workflow.

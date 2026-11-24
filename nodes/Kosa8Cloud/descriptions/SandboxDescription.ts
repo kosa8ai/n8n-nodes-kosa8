@@ -97,6 +97,19 @@ export const sandboxOperations: INodeProperties[] = [
 				action: 'Get many sandboxes',
 			},
 			{
+				name: 'Open Pull Request',
+				value: 'openPullRequest',
+				description:
+					"Commit the changes in the sandbox's GitHub repo, push a branch and open a pull request",
+				action: 'Open pull request from sandbox',
+			},
+			{
+				name: 'Push Branch',
+				value: 'pushBranch',
+				description: "Commit the changes in the sandbox's GitHub repo and push them to a branch",
+				action: 'Push branch from sandbox',
+			},
+			{
 				name: 'Sleep',
 				value: 'sleep',
 				description: 'Snapshot a sandbox and free its memory until it is used again',
@@ -119,6 +132,8 @@ export const sandboxFields: INodeProperties[] = [
 		'executeCommand',
 		'get',
 		'getBackgroundCommand',
+		'openPullRequest',
+		'pushBranch',
 		'sleep',
 		'wake',
 	]),
@@ -215,6 +230,15 @@ export const sandboxFields: INodeProperties[] = [
 				],
 			},
 			{
+				displayName: 'Repository',
+				name: 'repo',
+				type: 'string',
+				default: '',
+				placeholder: 'e.g. acme/api or acme/api@main',
+				description:
+					"A GitHub repo of your organization's connected GitHub (owner/name, optionally @branch, tag or commit). It is cloned into /workspace/&lt;name&gt;; no GitHub token enters the sandbox.",
+			},
+			{
 				displayName: 'Size',
 				name: 'size',
 				type: 'options',
@@ -248,6 +272,70 @@ export const sandboxFields: INodeProperties[] = [
 		],
 	},
 	simplifyField(['create', 'get', 'getAll', 'sleep', 'wake']),
+
+	/* --------------------- pushBranch / openPullRequest --------------------- */
+	{
+		displayName: 'Options',
+		name: 'options',
+		type: 'collection',
+		placeholder: 'Add Option',
+		default: {},
+		displayOptions: {
+			show: { resource: ['sandbox'], operation: ['pushBranch', 'openPullRequest'] },
+		},
+		options: [
+			{
+				displayName: 'Base Branch',
+				name: 'base',
+				type: 'string',
+				default: '',
+				placeholder: 'e.g. main',
+				description: "The branch to merge into. Leave empty for the repo's default branch.",
+				displayOptions: { show: { '/operation': ['openPullRequest'] } },
+			},
+			{
+				displayName: 'Body',
+				name: 'body',
+				type: 'string',
+				typeOptions: { rows: 4 },
+				default: '',
+				description: 'The pull request description',
+				displayOptions: { show: { '/operation': ['openPullRequest'] } },
+			},
+			{
+				displayName: 'Branch',
+				name: 'branch',
+				type: 'string',
+				default: '',
+				placeholder: 'e.g. fix/login',
+				description: 'The branch to push. Leave empty for kosa8/&lt;sandbox short ID&gt;.',
+			},
+			{
+				displayName: 'Commit Message',
+				name: 'message',
+				type: 'string',
+				default: '',
+				description: "Leave empty for 'Changes from kosa8 sandbox &lt;ID&gt;'",
+				displayOptions: { show: { '/operation': ['pushBranch'] } },
+			},
+			{
+				displayName: 'Draft',
+				name: 'draft',
+				type: 'boolean',
+				default: true,
+				description: 'Whether to open the pull request as a draft',
+				displayOptions: { show: { '/operation': ['openPullRequest'] } },
+			},
+			{
+				displayName: 'Title',
+				name: 'title',
+				type: 'string',
+				default: '',
+				description: 'The pull request title. Leave empty for a title kosa8 writes.',
+				displayOptions: { show: { '/operation': ['openPullRequest'] } },
+			},
+		],
+	},
 
 	/* ------------------------------ getAll ------------------------------ */
 	{
