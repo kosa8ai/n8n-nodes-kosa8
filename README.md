@@ -68,7 +68,7 @@ Pick the sandbox from a list, or give its ID (`sbx_…`), usually by expression 
 
 ### GitHub repos
 
-Connect GitHub once in kosa8 Cloud (an admin, at <https://app.kosa8.com/app#settings/github>) and pick the repos kosa8 may use. Then **Create** with **Repository** starts a sandbox from a repo, and **Push Branch** / **Open Pull Request** send the changes back. kosa8 makes a GitHub token for that one repo and that one operation, valid for at most an hour; the token never enters the sandbox, and every use is in the audit log. See <https://docs.kosa8.com/guides/github-repos/>.
+Connect GitHub once in kosa8 Cloud (an admin, at <https://app.kosa8.com/auth/github/connect>) and pick the repos kosa8 may use. Then **Create** with **Repository** starts a sandbox from a repo, and **Push Branch** / **Open Pull Request** send the changes back. kosa8 makes a GitHub token for that one repo and that one operation, valid for at most an hour; the token never enters the sandbox, and every use is in the audit log. See <https://docs.kosa8.com/guides/cloud-github/>.
 
 ## Using it as an AI agent tool
 

@@ -217,13 +217,13 @@ test('GitHub errors say where to connect or approve', async () => {
 				'/v1/sandboxes/sbx_1/github/pull-request',
 				{
 					statusCode: 409,
-					body: { error: 'github_not_connected', message: 'Connect GitHub first.', connect_url: 'https://app.kosa8.com/app#settings/github' },
+					body: { error: 'github_not_connected', message: 'Connect GitHub first.', connect_url: 'https://app.kosa8.com/auth/github/connect' },
 				},
 			],
 		],
 	});
 	await assert.rejects(run(notConnected), (err) => {
-		assert.match(err.description, /app#settings\/github/);
+		assert.match(err.description, /auth\/github\/connect/);
 		return true;
 	});
 	const perms = context({
