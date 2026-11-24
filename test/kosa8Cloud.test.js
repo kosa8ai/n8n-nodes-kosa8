@@ -431,3 +431,221 @@ test('file write (text and binary), read to binary, list', async () => {
 	assert.equal(items.length, 1);
 	assert.equal(items[0].json.name, 'hello.txt');
 });
+
+// --- Autopilot ---------------------------------------------------------------
+
+const { Kosa8CloudTrigger, verifySignature, SIGNATURE_TOLERANCE_S } = require('../dist/nodes/Kosa8CloudTrigger/Kosa8CloudTrigger.node.js');
+const crypto = require('node:crypto');
+
+test('autopilot: read-only operations plus Run Bot, and no approve, reject or enable', () => {
+	const d = new Kosa8Cloud().description;
+	const ops = d.properties
+		.filter((p) => p.name === 'operation' && p.displayOptions.show.resource[0] === 'autopilot')
+		.flatMap((p) => p.options);
+	assert.deepEqual(ops.map((o) => o.value).sort(), ['getRun', 'listApprovals', 'listBots', 'listRuns', 'runBot']);
+	assert.ok(!ops.some((o) => /approve|reject|enable|resume|decide/i.test(o.value)));
+	assert.match(ops.find((o) => o.value === 'listApprovals').description, /a person approves or rejects them in kosa8, Slack or a signed link/);
+	const dryRun = d.properties.find((p) => p.name === 'dryRun');
+	assert.equal(dryRun.default, true);
+});
+
+test('autopilot: each operation calls its contract path', async () => {
+	const routes = [
+		['GET', '/v1/bots/bot_1/runs', { body: { runs: [{ id: 'brun_1' }, { id: 'brun_2' }] } }],
+		['POST', '/v1/bots/bot_1/runs', (req) => ({ statusCode: 201, body: { run: { id: 'brun_3', dry_run: req.body.dry_run } } })],
+		['GET', '/v1/bots', { body: { bots: [{ id: 'bot_1', name: 'Spend guard', state: 'on' }], paused_all: false, pending_approvals: 1 } }],
+		['GET', '/v1/bot-runs/brun_1', { body: { run: { id: 'brun_1', state: 'succeeded', steps: [] } } }],
+		['GET', '/v1/approvals', { body: { approvals: [{ id: 'appr_1', action: 'sandbox.delete', tier: 'T3' }] } }],
+	];
+	const call = async (params) => {
+		const ctx = context({ params: { resource: 'autopilot', ...params }, routes });
+		const [items] = await run(ctx);
+		return { ctx, items };
+	};
+
+	let r = await call({ operation: 'listBots' });
+	assert.equal(r.items[0].json.id, 'bot_1');
+	assert.equal(r.ctx.requests[0].url, 'https://api.example.test/v1/bots');
+
+	r = await call({ operation: 'runBot', botId: { mode: 'list', value: 'bot_1' } });
+	assert.equal(r.ctx.requests[0].method, 'POST');
+	assert.deepEqual(r.ctx.requests[0].body, { dry_run: true }, 'dry run by default');
+	assert.equal(r.items[0].json.id, 'brun_3');
+
+	r = await call({ operation: 'runBot', botId: { mode: 'id', value: 'bot_1' }, dryRun: false });
+	assert.deepEqual(r.ctx.requests[0].body, { dry_run: false });
+
+	r = await call({ operation: 'listRuns', botId: { mode: 'id', value: 'bot_1' }, limit: 5 });
+	assert.equal(r.items.length, 2);
+	assert.deepEqual(r.ctx.requests[0].qs, { limit: 5 });
+
+	r = await call({ operation: 'getRun', runId: ' brun_1 ' });
+	assert.equal(r.items[0].json.state, 'succeeded');
+
+	r = await call({ operation: 'listApprovals' });
+	assert.equal(r.items[0].json.id, 'appr_1');
+	assert.deepEqual(r.ctx.requests[0].qs, { state: 'pending', limit: 50 });
+	assert.equal(r.ctx.requests[0].method, 'GET');
+
+	const escaped = context({
+		params: { resource: 'autopilot', operation: 'getRun', runId: 'brun/../x' },
+		routes: [['GET', '/v1/bot-runs/brun%2F..%2Fx', { body: { run: { id: 'x' } } }]],
+	});
+	await run(escaped);
+
+	await assert.rejects(
+		run(context({ params: { resource: 'autopilot', operation: 'runBot', botId: { mode: 'id', value: '' } }, routes })),
+		/'Bot' is empty/,
+	);
+});
+
+test('autopilot: human_required says a person must do it', async () => {
+	const ctx = context({
+		params: { resource: 'autopilot', operation: 'runBot', botId: { mode: 'id', value: 'bot_1' }, dryRun: false },
+		routes: [['POST', '/v1/bots/bot_1/runs', { statusCode: 403, body: { error: 'human_required', message: 'a person must approve this' } }]],
+	});
+	await assert.rejects(run(ctx), (err) => {
+		assert.match(err.description, /Only a person can do this/);
+		return true;
+	});
+});
+
+// --- Trigger -----------------------------------------------------------------
+
+const SECRET = 'whsec_testsecret';
+const sign = (body, t = Math.floor(Date.now() / 1000), secret = SECRET) =>
+	`t=${t},v1=${crypto.createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`;
+
+test('trigger: description follows the trigger conventions', () => {
+	const d = new Kosa8CloudTrigger().description;
+	assert.equal(d.name, 'kosa8CloudTrigger');
+	assert.match(d.displayName, /Trigger/);
+	assert.deepEqual(d.inputs, []);
+	assert.deepEqual(d.credentials, [{ name: 'kosa8CloudApi', required: true }]);
+	const events = d.properties.find((p) => p.name === 'events');
+	assert.deepEqual(events.options.map((o) => o.value).sort(), ['bot.approval.requested', 'bot.run.finished']);
+});
+
+test('trigger: verifySignature checks HMAC, format and age', () => {
+	const body = '{"type":"bot.run.finished"}';
+	const now = 1_800_000_000;
+	assert.equal(verifySignature(SECRET, sign(body, now), body, now), true);
+	assert.equal(verifySignature(SECRET, sign(body, now), Buffer.from(body), now), true);
+	assert.equal(verifySignature(SECRET, sign(body, now, 'whsec_other'), body, now), false);
+	assert.equal(verifySignature(SECRET, sign(body + ' ', now), body, now), false);
+	assert.equal(verifySignature(SECRET, sign(body, now - SIGNATURE_TOLERANCE_S - 1), body, now), false);
+	assert.equal(verifySignature(SECRET, undefined, body, now), false);
+	assert.equal(verifySignature('', sign(body, now), body, now), false);
+	assert.equal(verifySignature(SECRET, 't=abc,v1=00', body, now), false);
+});
+
+function hookContext({ params, routes, staticData = {}, url = 'https://n8n.example.test/webhook/abc/webhook' }) {
+	const ctx = context({ params, routes });
+	ctx.getWorkflowStaticData = () => staticData;
+	ctx.getNodeWebhookUrl = () => url;
+	ctx.getWorkflow = () => ({ id: 'wf1', name: 'Bots' });
+	ctx.staticData = staticData;
+	return ctx;
+}
+
+test('trigger: create registers the webhook and keeps its secret; checkExists and delete', async () => {
+	const methods = new Kosa8CloudTrigger().webhookMethods.default;
+	const params = { events: ['bot.run.finished', 'bot.approval.requested'] };
+	const created = hookContext({
+		params,
+		routes: [
+			[
+				'POST',
+				'/v1/webhooks',
+				(req) => ({ statusCode: 201, body: { webhook: { id: 'wh_1', url: req.body.url, events: req.body.events, secret: SECRET } } }),
+			],
+		],
+	});
+	assert.equal(await methods.create.call(created), true);
+	assert.deepEqual(created.requests[0].body, {
+		url: 'https://n8n.example.test/webhook/abc/webhook',
+		events: ['bot.run.finished', 'bot.approval.requested'],
+		description: 'n8n: Bots',
+	});
+	assert.deepEqual(created.staticData, { webhookId: 'wh_1', secret: SECRET });
+
+	const list = (events) => [
+		'GET',
+		'/v1/webhooks',
+		{ body: { webhooks: [{ id: 'wh_1', url: 'https://n8n.example.test/webhook/abc/webhook', events }] } },
+	];
+	const exists = hookContext({
+		params,
+		staticData: { webhookId: 'wh_1', secret: SECRET },
+		routes: [list(['bot.approval.requested', 'bot.run.finished'])],
+	});
+	assert.equal(await methods.checkExists.call(exists), true);
+
+	const changed = hookContext({
+		params,
+		staticData: { webhookId: 'wh_1', secret: SECRET },
+		routes: [list(['bot.run.finished']), ['DELETE', '/v1/webhooks/wh_1', { body: { ok: true } }]],
+	});
+	assert.equal(await methods.checkExists.call(changed), false);
+	assert.equal(changed.requests[1].method, 'DELETE');
+	assert.deepEqual(changed.staticData, {});
+
+	assert.equal(await methods.checkExists.call(hookContext({ params, routes: [] })), false);
+
+	const gone = hookContext({
+		params,
+		staticData: { webhookId: 'wh_1', secret: SECRET },
+		routes: [['DELETE', '/v1/webhooks/wh_1', { statusCode: 404, body: { error: 'not_found', message: 'no such webhook' } }]],
+	});
+	assert.equal(await methods.delete.call(gone), true);
+	assert.deepEqual(gone.staticData, {});
+});
+
+function webhookContext({ body, signature, events = ['bot.run.finished'], options = {}, secret = SECRET }) {
+	const raw = JSON.stringify(body);
+	const response = {
+		code: null,
+		status(c) {
+			this.code = c;
+			return this;
+		},
+		send() {
+			return this;
+		},
+		end() {
+			return this;
+		},
+	};
+	return {
+		response,
+		getWorkflowStaticData: () => ({ webhookId: 'wh_1', secret }),
+		getRequestObject: () => ({ headers: { 'kosa8-signature': signature ?? sign(raw) }, rawBody: Buffer.from(raw) }),
+		getResponseObject: () => response,
+		getBodyData: () => body,
+		getNodeParameter: (name, fallback) => ({ events, options })[name] ?? fallback,
+		helpers: { returnJsonArray: (a) => a.map((json) => ({ json })) },
+	};
+}
+
+test('trigger: webhook() starts the workflow for a signed, selected event only', async () => {
+	const t = new Kosa8CloudTrigger();
+	const evt = {
+		id: 'evt_1',
+		type: 'bot.run.finished',
+		created_at: 1,
+		org_id: 'org_1',
+		data: { bot_id: 'bot_1', run_id: 'brun_1', state: 'succeeded' },
+	};
+
+	const ok = await t.webhook.call(webhookContext({ body: evt }));
+	assert.deepEqual(ok.workflowData[0][0].json, evt);
+
+	const bad = webhookContext({ body: evt, signature: sign('{}') });
+	assert.deepEqual(await t.webhook.call(bad), { noWebhookResponse: true });
+	assert.equal(bad.response.code, 401);
+
+	assert.deepEqual(await t.webhook.call(webhookContext({ body: { ...evt, type: 'sandbox.created' } })), {});
+	assert.deepEqual(await t.webhook.call(webhookContext({ body: evt, options: { botId: 'bot_2' } })), {});
+	const same = await t.webhook.call(webhookContext({ body: evt, options: { botId: 'bot_1' } }));
+	assert.equal(same.workflowData[0].length, 1);
+});

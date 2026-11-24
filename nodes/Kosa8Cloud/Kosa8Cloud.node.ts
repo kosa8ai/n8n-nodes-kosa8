@@ -11,6 +11,7 @@ import type {
 } from 'n8n-workflow';
 import { NodeApiError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
 
+import { autopilotFields, autopilotOperations } from './descriptions/AutopilotDescription';
 import { fileFields, fileOperations } from './descriptions/FileDescription';
 import { sandboxFields, sandboxOperations } from './descriptions/SandboxDescription';
 import {
@@ -68,6 +69,7 @@ export class Kosa8Cloud implements INodeType {
 				type: 'options',
 				noDataExpression: true,
 				options: [
+					{ name: 'Autopilot', value: 'autopilot' },
 					{ name: 'File', value: 'file' },
 					{ name: 'Sandbox', value: 'sandbox' },
 				],
@@ -77,6 +79,8 @@ export class Kosa8Cloud implements INodeType {
 			...sandboxFields,
 			...fileOperations,
 			...fileFields,
+			...autopilotOperations,
+			...autopilotFields,
 		],
 	};
 
@@ -112,6 +116,30 @@ export class Kosa8Cloud implements INodeType {
 			},
 		},
 		listSearch: {
+			async searchBots(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+			): Promise<INodeListSearchResult> {
+				const response = (await kosa8ApiRequest.call(this, 'GET', '/v1/bots')) as IDataObject;
+				const needle = (filter ?? '').toLowerCase();
+				const results = ((response.bots as IDataObject[]) ?? [])
+					.filter((b) => {
+						if (!needle) return true;
+						return (
+							String(b.id ?? '')
+								.toLowerCase()
+								.includes(needle) ||
+							String(b.name ?? '')
+								.toLowerCase()
+								.includes(needle)
+						);
+					})
+					.map((b) => ({
+						name: `${(b.name as string) || (b.id as string)} (${b.state as string})`,
+						value: b.id as string,
+					}));
+				return { results };
+			},
 			async searchSandboxes(
 				this: ILoadOptionsFunctions,
 				filter?: string,
@@ -155,6 +183,8 @@ export class Kosa8Cloud implements INodeType {
 					returnData.push(...(await sandboxOperation.call(this, operation, i)));
 				} else if (resource === 'file') {
 					returnData.push(...(await fileOperation.call(this, operation, i)));
+				} else if (resource === 'autopilot') {
+					returnData.push(...(await autopilotOperation.call(this, operation, i)));
 				} else {
 					throw new NodeOperationError(this.getNode(), `Unknown resource '${resource}'`, {
 						itemIndex: i,
@@ -537,6 +567,81 @@ async function fileOperation(
 		if (options.recursive === true) qs.recursive = '1';
 		await kosa8ApiRequest.call(this, 'DELETE', sandboxUrl(id, '/files'), { qs, itemIndex: i });
 		return out({ deleted: true }, i);
+	}
+
+	throw new NodeOperationError(this.getNode(), `Unknown operation '${operation}'`, {
+		itemIndex: i,
+	});
+}
+
+/**
+ * Autopilot is read-only here, plus Run Bot (a dry run by default). Approving,
+ * rejecting and turning a bot on are a person's: in kosa8, Slack or a signed link.
+ */
+async function autopilotOperation(
+	this: IExecuteFunctions,
+	operation: string,
+	i: number,
+): Promise<INodeExecutionData[]> {
+	if (operation === 'listBots') {
+		const got = (await kosa8ApiRequest.call(this, 'GET', '/v1/bots', {
+			itemIndex: i,
+		})) as IDataObject;
+		return out((got.bots as IDataObject[]) ?? [], i);
+	}
+
+	if (operation === 'listApprovals') {
+		const limit = this.getNodeParameter('limit', i, 50) as number;
+		const got = (await kosa8ApiRequest.call(this, 'GET', '/v1/approvals', {
+			qs: { state: 'pending', limit },
+			itemIndex: i,
+		})) as IDataObject;
+		return out((got.approvals as IDataObject[]) ?? [], i);
+	}
+
+	if (operation === 'getRun') {
+		const runId = (this.getNodeParameter('runId', i, '') as string).trim();
+		if (!runId) {
+			throw new NodeOperationError(this.getNode(), "'Run ID' is empty", {
+				itemIndex: i,
+				description: "Use the 'id' that Run Bot or List Runs returned (brun_...).",
+			});
+		}
+		const got = (await kosa8ApiRequest.call(
+			this,
+			'GET',
+			`/v1/bot-runs/${encodeURIComponent(runId)}`,
+			{ itemIndex: i },
+		)) as IDataObject;
+		return out((got.run as IDataObject) ?? got, i);
+	}
+
+	const botId = this.getNodeParameter('botId', i, '', { extractValue: true }) as string;
+	if (!botId) {
+		throw new NodeOperationError(this.getNode(), "'Bot' is empty", {
+			itemIndex: i,
+			description: 'Choose a bot from the list, or give its ID (bot_...).',
+		});
+	}
+	const botPath = `/v1/bots/${encodeURIComponent(botId)}/runs`;
+
+	if (operation === 'runBot') {
+		const dryRun = this.getNodeParameter('dryRun', i, true) as boolean;
+		const got = (await kosa8ApiRequest.call(this, 'POST', botPath, {
+			body: { dry_run: dryRun !== false },
+			itemIndex: i,
+			timeout: 120_000,
+		})) as IDataObject;
+		return out((got.run as IDataObject) ?? got, i);
+	}
+
+	if (operation === 'listRuns') {
+		const limit = this.getNodeParameter('limit', i, 50) as number;
+		const got = (await kosa8ApiRequest.call(this, 'GET', botPath, {
+			qs: { limit },
+			itemIndex: i,
+		})) as IDataObject;
+		return out((got.runs as IDataObject[]) ?? [], i);
 	}
 
 	throw new NodeOperationError(this.getNode(), `Unknown operation '${operation}'`, {
