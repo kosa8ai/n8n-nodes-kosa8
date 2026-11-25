@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 - 2026-11-25
 
 - **Code** resource, **Run** operation: Python, JavaScript or Bash in a fresh microVM deleted after the run, with kosa8 secrets brokered (never inside the microVM), no internet unless listed, the item as `KOSA8_INPUT` and printed JSON parsed into `json`.
 - **Autopilot** resource: **List Bots**, **Run Bot** (**Dry Run** on by default), **List Runs**, **Get Run** and **List Pending Approvals**. Read-only apart from Run Bot: there is no approve, reject or enable operation; a person answers approvals in kosa8, Slack or a signed link. A `human_required` refusal says so.
