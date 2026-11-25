@@ -54,7 +54,7 @@ export const codeFields: INodeProperties[] = [
 		typeOptions: { loadOptionsMethod: 'getSecrets' },
 		default: [],
 		description:
-			'kosa8 secrets to broker into the run. The microVM only gets a placeholder; kosa8 adds the real value on the way out, and only to that secret\'s own service. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
+			'Secrets from kosa8 to broker into the run. The microVM only gets a placeholder; kosa8 adds the real value on the way out, and only to that secret\'s own service. Choose from the list, or specify IDs using an <a href="https://docs.n8n.io/code/expressions/">expression</a>.',
 		displayOptions: { show },
 	},
 	{

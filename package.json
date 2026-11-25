@@ -1,6 +1,6 @@
 {
 	"name": "n8n-nodes-kosa8",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "kosa8 Cloud sandboxes for n8n: run commands and move files in sealed microVMs",
 	"license": "MIT",
 	"homepage": "https://github.com/kosa8ai/n8n-nodes-kosa8#readme",
