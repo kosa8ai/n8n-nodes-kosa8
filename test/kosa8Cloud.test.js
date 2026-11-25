@@ -72,6 +72,7 @@ test('description: tool use, credential, resources', () => {
 		'sandbox:sleep',
 		'sandbox:wake',
 		'sandbox:executeCommand',
+		'code:run',
 		'sandbox:pushBranch',
 		'sandbox:openPullRequest',
 		'file:read',
@@ -648,4 +649,63 @@ test('trigger: webhook() starts the workflow for a signed, selected event only',
 	assert.deepEqual(await t.webhook.call(webhookContext({ body: evt, options: { botId: 'bot_2' } })), {});
 	const same = await t.webhook.call(webhookContext({ body: evt, options: { botId: 'bot_1' } }));
 	assert.equal(same.workflowData[0].length, 1);
+});
+
+test('code run: a sized microVM with brokered secrets and no internet, the code, then delete', async () => {
+	const ctx = context({
+		params: {
+			resource: 'code',
+			operation: 'run',
+			language: 'python',
+			code: 'import json, os\nprint(json.dumps({"n": len(os.environ["KOSA8_INPUT"])}))',
+			secrets: ['openai'],
+			options: { allowHosts: 'pypi.org, *.github.com', timeout: 30 },
+		},
+		routes: [
+			['POST', '/v1/sandboxes/sbx_c/exec', { body: { exit: 0, stdout: '{"n": 2}\n', stderr: '' } }],
+			['POST', '/v1/sandboxes', { body: { sandbox: { id: 'sbx_c', state: 'running' } } }],
+			['DELETE', '/v1/sandboxes/sbx_c', { body: { ok: true } }],
+		],
+	});
+	const [[item]] = await run(ctx);
+	assert.equal(item.json.exit_code, 0);
+	assert.deepEqual(item.json.json, { n: 2 });
+	assert.deepEqual(item.json.secrets, ['openai']);
+	const [create, exec, del] = ctx.requests;
+	assert.equal(create.body.size, '2x4');
+	assert.deepEqual(create.body.secrets, ['openai']);
+	assert.deepEqual(create.body.egress, { internet: false, allow: ['pypi.org', '*.github.com'] });
+	assert.ok(create.body.ttl_s > 30);
+	assert.equal(exec.body.timeout_s, 30);
+	assert.match(exec.body.cmd[2], /base64 -d > \/tmp\/kosa8-main\.py && exec python3/);
+	const code = exec.body.env.find((e) => e.startsWith('KOSA8_CODE=')).slice('KOSA8_CODE='.length);
+	assert.match(Buffer.from(code, 'base64').toString(), /print\(json\.dumps/);
+	assert.ok(exec.body.env.includes('KOSA8_INPUT={}'));
+	assert.equal(del.method, 'DELETE');
+});
+
+test('code run: the microVM is deleted when the code fails to run', async () => {
+	const ctx = context({
+		params: { resource: 'code', operation: 'run', language: 'node', code: 'console.log(1)', secrets: [] },
+		routes: [
+			['POST', '/v1/sandboxes/sbx_d/exec', () => { throw new Error('host lost'); }],
+			['POST', '/v1/sandboxes', { body: { sandbox: { id: 'sbx_d', state: 'running' } } }],
+			['DELETE', '/v1/sandboxes/sbx_d', { body: { ok: true } }],
+		],
+	});
+	await assert.rejects(run(ctx));
+	assert.equal(ctx.requests.at(-1).method, 'DELETE');
+	assert.equal(ctx.requests[0].body.secrets, undefined);
+});
+
+test('code run: bad hosts, empty code and big input are refused before anything starts', async () => {
+	for (const params of [
+		{ code: 'x', options: { allowHosts: 'http://evil' } },
+		{ code: '   ' },
+		{ code: 'x', options: { allowHosts: 'a b' } },
+	]) {
+		const ctx = context({ params: { resource: 'code', operation: 'run', language: 'bash', secrets: [], ...params }, routes: [] });
+		await assert.rejects(run(ctx));
+		assert.equal(ctx.requests.length, 0);
+	}
 });

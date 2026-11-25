@@ -12,6 +12,7 @@ import type {
 import { NodeApiError, NodeConnectionTypes, NodeOperationError, sleep } from 'n8n-workflow';
 
 import { autopilotFields, autopilotOperations } from './descriptions/AutopilotDescription';
+import { codeFields, codeOperations } from './descriptions/CodeDescription';
 import { fileFields, fileOperations } from './descriptions/FileDescription';
 import { sandboxFields, sandboxOperations } from './descriptions/SandboxDescription';
 import {
@@ -70,6 +71,7 @@ export class Kosa8Cloud implements INodeType {
 				noDataExpression: true,
 				options: [
 					{ name: 'Autopilot', value: 'autopilot' },
+					{ name: 'Code', value: 'code' },
 					{ name: 'File', value: 'file' },
 					{ name: 'Sandbox', value: 'sandbox' },
 				],
@@ -81,11 +83,21 @@ export class Kosa8Cloud implements INodeType {
 			...fileFields,
 			...autopilotOperations,
 			...autopilotFields,
+			...codeOperations,
+			...codeFields,
 		],
 	};
 
 	methods = {
 		loadOptions: {
+			async getSecrets(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const response = (await kosa8ApiRequest.call(this, 'GET', '/v1/secrets')) as IDataObject;
+				return ((response.secrets as IDataObject[]) ?? []).map((s) => ({
+					name: s.name as string,
+					value: s.name as string,
+					description: s.upstream ? `added for ${s.upstream as string}` : undefined,
+				}));
+			},
 			async getTemplates(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
 				const response = (await kosa8ApiRequest.call(this, 'GET', '/v1/templates')) as IDataObject;
 				const templates = (response.templates as IDataObject[]) ?? [];
@@ -183,6 +195,8 @@ export class Kosa8Cloud implements INodeType {
 					returnData.push(...(await sandboxOperation.call(this, operation, i)));
 				} else if (resource === 'file') {
 					returnData.push(...(await fileOperation.call(this, operation, i)));
+				} else if (resource === 'code') {
+					returnData.push(...(await codeOperation.call(this, operation, i, items[i].json)));
 				} else if (resource === 'autopilot') {
 					returnData.push(...(await autopilotOperation.call(this, operation, i)));
 				} else {
@@ -647,4 +661,144 @@ async function autopilotOperation(
 	throw new NodeOperationError(this.getNode(), `Unknown operation '${operation}'`, {
 		itemIndex: i,
 	});
+}
+
+const RUNNERS: Record<string, { file: string; cmd: string }> = {
+	python: { file: '/tmp/kosa8-main.py', cmd: 'python3 /tmp/kosa8-main.py' },
+	node: { file: '/tmp/kosa8-main.js', cmd: 'node /tmp/kosa8-main.js' },
+	bash: { file: '/tmp/kosa8-main.sh', cmd: 'bash /tmp/kosa8-main.sh' },
+};
+const HOST_RE = /^(\*\.)?[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+const MAX_CODE = 40 * 1024;
+const MAX_INPUT = 32 * 1024;
+
+/**
+ * Code → Run: a fresh sized microVM with the chosen kosa8 secrets brokered in
+ * (the microVM holds placeholders only) and no internet beyond the secrets'
+ * services and the hosts listed. The code runs once and the microVM is
+ * deleted whatever happens.
+ */
+async function codeOperation(
+	this: IExecuteFunctions,
+	operation: string,
+	i: number,
+	input: IDataObject,
+): Promise<INodeExecutionData[]> {
+	if (operation !== 'run') {
+		throw new NodeOperationError(this.getNode(), `Unknown operation '${operation}'`, { itemIndex: i });
+	}
+	const language = this.getNodeParameter('language', i) as string;
+	const code = this.getNodeParameter('code', i) as string;
+	const secrets = (this.getNodeParameter('secrets', i, []) as string[]).filter(Boolean);
+	const options = this.getNodeParameter('options', i, {}) as IDataObject;
+	const runner = RUNNERS[language];
+	if (!runner) {
+		throw new NodeOperationError(this.getNode(), `Unknown language '${language}'`, { itemIndex: i });
+	}
+	if (!code.trim()) {
+		throw new NodeOperationError(this.getNode(), "'Code' is empty", {
+			itemIndex: i,
+			description: 'Write the program to run.',
+		});
+	}
+	if (Buffer.byteLength(code) > MAX_CODE) {
+		throw new NodeOperationError(this.getNode(), `'Code' is over ${MAX_CODE / 1024} KiB`, {
+			itemIndex: i,
+			description: 'Put bigger programs in a sandbox with the Sandbox and File operations.',
+		});
+	}
+	const timeout = Math.min(90, Math.max(1, Math.floor((options.timeout as number | undefined) ?? 60)));
+	const hosts = String(options.allowHosts ?? '')
+		.split(',')
+		.map((h) => h.trim())
+		.filter(Boolean);
+	for (const h of hosts) {
+		if (!HOST_RE.test(h)) {
+			throw new NodeOperationError(
+				this.getNode(),
+				`'Allowed Hosts' has '${h}', which is not a host name`,
+				{
+					itemIndex: i,
+					description: 'Use names such as pypi.org or *.github.com, separated by commas.',
+				},
+			);
+		}
+	}
+	const env: string[] = [];
+	if (options.passInput !== false) {
+		const text = JSON.stringify(input ?? {});
+		if (Buffer.byteLength(text) > MAX_INPUT) {
+			throw new NodeOperationError(this.getNode(), `This item is over ${MAX_INPUT / 1024} KiB as JSON`, {
+				itemIndex: i,
+				description: "Turn off 'Pass Input Item', or send the data as a file with the File operations.",
+			});
+		}
+		env.push(`KOSA8_INPUT=${text}`);
+	}
+
+	const body: IDataObject = {
+		size: (options.size as string) || '2x4',
+		egress: { internet: false, allow: hosts },
+		ttl_s: timeout + 300,
+		labels: { 'kosa8.n8n': 'run-code' },
+	};
+	if (secrets.length) body.secrets = secrets;
+	const created = (await kosa8ApiRequest.call(this, 'POST', '/v1/sandboxes', {
+		body,
+		itemIndex: i,
+		timeout: 120_000,
+	})) as IDataObject;
+	let sandbox = (created.sandbox as IDataObject) ?? created;
+	const id = sandbox.id as string;
+	const started = Date.now();
+	try {
+		const deadline = Date.now() + 180_000;
+		while (sandbox.state !== 'running') {
+			if (FINAL_STATES.includes(sandbox.state as string) || Date.now() > deadline) {
+				throw new NodeOperationError(
+					this.getNode(),
+					`The microVM did not start (state '${sandbox.state as string}')`,
+					{
+						itemIndex: i,
+						description: (sandbox.last_error as string) || 'Try again in a minute.',
+					},
+				);
+			}
+			await sleep(CREATE_POLL_MS);
+			const got = (await kosa8ApiRequest.call(this, 'GET', sandboxUrl(id), {
+				itemIndex: i,
+			})) as IDataObject;
+			sandbox = (got.sandbox as IDataObject) ?? got;
+		}
+		const b64 = Buffer.from(code, 'utf8').toString('base64');
+		const result = (await kosa8ApiRequest.call(this, 'POST', sandboxUrl(id, '/exec'), {
+			body: {
+				cmd: ['sh', '-c', `printf %s "$KOSA8_CODE" | base64 -d > ${runner.file} && exec ${runner.cmd}`],
+				env: [...env, `KOSA8_CODE=${b64}`],
+				timeout_s: timeout,
+			},
+			itemIndex: i,
+			timeout: (timeout + 60) * 1000,
+		})) as IDataObject;
+		const stdout = String(result.stdout ?? '');
+		const outJson: IDataObject = {
+			exit_code: (result.exit as number | null) ?? null,
+			stdout,
+			stderr: String(result.stderr ?? ''),
+			duration_ms: Date.now() - started,
+			secrets,
+			sandbox_id: id,
+		};
+		try {
+			const parsed = JSON.parse(stdout.trim());
+			if (parsed && typeof parsed === 'object') outJson.json = parsed as IDataObject;
+		} catch {
+			// Plain text output: stdout as is.
+		}
+		return out(outJson, i);
+	} finally {
+		await kosa8ApiRequest
+			.call(this, 'DELETE', sandboxUrl(id), { itemIndex: i })
+			.catch(() => undefined);
+	}
 }

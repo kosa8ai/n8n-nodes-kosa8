@@ -71,6 +71,10 @@ Pick the sandbox from a list, or give its ID (`sbx_…`), usually by expression 
 
 Connect GitHub once in kosa8 Cloud (an admin, at <https://app.kosa8.com/auth/github/connect>) and pick the repos kosa8 may use. Then **Create** with **Repository** starts a sandbox from a repo, and **Push Branch** / **Open Pull Request** send the changes back. kosa8 makes a GitHub token for that one repo and that one operation, valid for at most an hour; the token never enters the sandbox, and every use is in the audit log. See <https://docs.kosa8.com/guides/cloud-github/>.
 
+### Code
+
+- **Run**: run Python, JavaScript (Node.js) or Bash safely, in one step. Each run gets a fresh microVM that is deleted afterwards. Pick **Secrets** saved in kosa8: the microVM only holds a placeholder, and kosa8 adds the real key on the way out, only to that secret's own service. There is no internet unless you list **Allowed Hosts**. The item comes in as JSON in `KOSA8_INPUT`; what the code prints comes back as `stdout` (and as `json` when it printed JSON), with `exit_code` and `stderr`. Up to 90 seconds a run. A use for it: code that needs an API key you do not want inside n8n's own Code node.
+
 ### Autopilot
 
 Autopilot bots watch your sandboxes, spend and agents and act on what they see. From n8n you can read them and run them; turning a bot on and answering approvals stay with a person in kosa8 (<https://app.kosa8.com/app#autopilot>), Slack or a signed link.
